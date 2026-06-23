@@ -7,6 +7,86 @@ TAKEOFF_COMMAND = mavutil.mavlink.MAV_CMD_NAV_TAKEOFF
 LAND_COMMAND = mavutil.mavlink.MAV_CMD_NAV_LAND
 RTL_COMMAND = mavutil.mavlink.MAV_CMD_NAV_RETURN_TO_LAUNCH
 
+#Notes
+"""
+There is a major issue with sending velocity commands
+That is if the companion computer gets disconnected from the drone while sending velcocity commands,
+the drone will keep moving in the last direction at the last speed that was sent in. This is a major safety issue.
+To solve this issue, GUID_TIMEOUT can be set to a low value. But when travelling towards a target far away this timeout can be reached before the drone reaches the target.
+To solve this we can use a proportional controller where the velocity is repeatedly sent based on how far the drone is forom the target.
+OR (better solution) we can use position commands instead of velocity commands. This way the drone will keep trying to reach the target position. 
+This won't be the best solution if we're using obstacle avoidance on the Pi
+
+For a program that will control the drone, a loop needs to be used. If a position commmand is sent, update a local varible and have a listener (not in the main loop) check whether the drone reached the target position and update
+the local variable accordingly. This is needed so that velocity commands that contradict the position command is not sent while the drone is trying to reach the target position. 
+The listener will also be used to check if the drone is in guided mode and if not, set it to guided mode. This is needed because if the drone is not in guided mode, it will not follow the position command and will instead follow the RC controller commands.
+Another issue if the drone is not in GUIDED mode is that if a position command is sent, the listener will continue to listen and the drone will never read the target position.
+
+A technique is needed to check if the drone reached the target altitude when taking off.
+
+"""
+
+
+#IMPORTANT
+"""
+The position commands have not been tested!!!
+"""
+
+
+#How to set the type mask for SET_POSITION_TARGET_LOCAL_NED 
+"""
+SET_POSITION_TARGET_LOCAL_NED type_mask notes
+
+SET_POSITION_TARGET_LOCAL_NED can send position, velocity, acceleration/force,
+yaw, and yaw-rate targets in one message.
+
+The type_mask tells the flight controller which fields to ignore.
+You add the mask values for every field you do NOT want to use.
+
+Common mask values:
+    X_IGNORE        = 1      # ignore position x
+    Y_IGNORE        = 2      # ignore position y
+    Z_IGNORE        = 4      # ignore position z
+
+    VX_IGNORE       = 8      # ignore velocity x
+    VY_IGNORE       = 16     # ignore velocity y
+    VZ_IGNORE       = 32     # ignore velocity z
+
+    AX_IGNORE       = 64     # ignore acceleration x
+    AY_IGNORE       = 128    # ignore acceleration y
+    AZ_IGNORE       = 256    # ignore acceleration z
+
+    FORCE_SET       = 512    # use force instead of acceleration
+
+    YAW_IGNORE      = 1024   # ignore yaw
+    YAW_RATE_IGNORE = 2048   # ignore yaw rate
+
+Example: position-only control
+
+    type_mask = 8 + 16 + 32 + 64 + 128 + 256 + 1024 + 2048
+    type_mask = 3576
+
+This means:
+    - use position x, y, z
+    - ignore velocity
+    - ignore acceleration
+    - ignore yaw
+    - ignore yaw rate
+
+Setting an unused field to 0 is NOT the same as ignoring it.
+The field is only ignored if the correct bit is set in type_mask.
+
+Useful frame:
+    MAV_FRAME_BODY_OFFSET_NED
+
+In BODY_OFFSET_NED:
+    x = forward
+    y = right
+    z = down
+"""
+
+
+#Safety checks and mode setters
 """
 SAFETY CHECKS AND MODE SETTERS
 
@@ -21,9 +101,10 @@ get_mode() - returns the current mode of the drone
 
 """
 
+
+#All available vehicle commands
 """
 ALL AVAILABLE VEHICLE COMMANDS
-
 
 <#> Basic Vehicle State Functions
 get_flight_status() will return a dictionary of the following functions
@@ -57,7 +138,7 @@ safe_disarm() - Checks if landed and safe to disarm. Returns nothing?
 <#> Take Off/Land
 *MAKE SURE THE DRONE IS IN GUIDED MODE FOR THESE FUNCTION 
 *OTHERWISE THE DRONE WILL BEHAVE UNEXPECTEDLY
-*EX - DRONE TOOK OFF WITH FULL THROTTLE WHEN USING THE TAKE OFF FUNCTION
+*EX - DRONE TOOK OFF WITH FULL THROTTLE WHEN USING THE TAKE OFF FUNCTION IN LOITER
 takeoff(target_altitude_m)
 land()
 rtl()
@@ -530,10 +611,58 @@ class Drone:
 
         return self.send_velocity_body(0, 0, 0)
 
+    def send_position_body(self, forward_m, right_m, down_m):
+        """
+        Sends a position command in the drone's body-offset frame.
+
+        forward_m:
+            Positive = move forward
+            Negative = move backward
+
+        right_m:
+            Positive = move right
+            Negative = move left
+
+        down_m:
+            Positive = move down
+            Negative = move up
+
+        Returns:
+            ("success", None)
+            ("Please connect to drone first", None)
+        """
+
+        if not self.has_connection_object():
+            return "Please connect to drone first", None
+
+        # Use position only.
+        # Ignore velocity, acceleration, yaw, and yaw rate.
+        position_only_type_mask = 3576
+
+        self.master.mav.set_position_target_local_ned_send(
+            0,
+            self.master.target_system,
+            self.master.target_component,
+            mavutil.mavlink.MAV_FRAME_BODY_OFFSET_NED,
+            position_only_type_mask,
+
+            forward_m,
+            right_m,
+            down_m,
+
+            0, 0, 0,  # velocity ignored
+            0, 0, 0,  # acceleration ignored
+            0,        # yaw ignored
+            0         # yaw rate ignored
+        )
+
+        return "success", None
+        
+
 
 #<#> Movement Convinience Functions
-
-    def move_up(self, speed_mps=0.3):
+### Velocity-based movement functions (in m/s) in the drone's body frame
+    def move_up_vel(self, speed_mps=0.3):
         """
         Moves the drone upward at the given speed.
 
@@ -545,7 +674,7 @@ class Drone:
 
         return self.send_velocity_body(0, 0, -speed_mps)
 
-    def move_down(self, speed_mps=0.3):
+    def move_down_vel(self, speed_mps=0.3):
         """
         Moves the drone downward at the given speed.
 
@@ -557,7 +686,7 @@ class Drone:
 
         return self.send_velocity_body(0, 0, speed_mps)
 
-    def move_forward(self, speed_mps=0.5):
+    def move_forward_vel(self, speed_mps=0.5):
         """
         Moves the drone forward at the given speed.
 
@@ -569,7 +698,7 @@ class Drone:
 
         return self.send_velocity_body(speed_mps, 0, 0)
 
-    def move_backward(self, speed_mps=0.5):
+    def move_backward_vel(self, speed_mps=0.5):
         """
         Moves the drone backward at the given speed.
 
@@ -581,7 +710,7 @@ class Drone:
 
         return self.send_velocity_body(-speed_mps, 0, 0)
 
-    def move_right(self, speed_mps=0.5):
+    def move_right_vel(self, speed_mps=0.5):
         """
         Moves the drone right at the given speed.
 
@@ -593,7 +722,7 @@ class Drone:
 
         return self.send_velocity_body(0, speed_mps, 0)
 
-    def move_left(self, speed_mps=0.5):
+    def move_left_vel(self, speed_mps=0.5):
         """
         Moves the drone left at the given speed.
 
@@ -604,6 +733,37 @@ class Drone:
         """
 
         return self.send_velocity_body(0, -speed_mps, 0)
+
+### Position based movement functions (in meters) in the drone's body frame
+    def move_up_pos(self, distance_m=0.5):
+        """
+        Moves the drone upward by the given distance.
+
+        Returns:
+            ("success", None)
+            ("Please connect to drone first", None)
+        """
+
+        return self.send_position_body(0, 0, -distance_m)
+
+    def move_down_pos(self, distance_m=0.5):
+        return self.send_position_body(0, 0, distance_m)
+
+    def move_forward_pos(self, distance_m=0.5):
+        return self.send_position_body(distance_m, 0, 0)
+
+    def move_backward_pos(self, distance_m=0.5):
+        return self.send_position_body(-distance_m, 0, 0)
+
+    def move_right_pos(self, distance_m=0.5):
+        return self.send_position_body(0, distance_m, 0)
+
+    def move_left_pos(self, distance_m=0.5):
+        return self.send_position_body(0, -distance_m, 0)
+
+
+
+
 
 
 # Height adjust global (Go to the altitude that was passed in)
