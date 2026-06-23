@@ -1,5 +1,4 @@
 # Import all the basic drone control functions
-from pymavlink import mavutil
 from commands import *
 import time
 import sys
