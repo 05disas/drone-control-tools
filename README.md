@@ -11,4 +11,4 @@ This repository contains Python MAVLink control tools for an ArduPilot-based dro
 
 ## Safety Note
 
-New commands should be tested with props removed or in simulation first.
+New commands should be tested with caution. The drone can behave unexpectedly and possibly fly away. 
