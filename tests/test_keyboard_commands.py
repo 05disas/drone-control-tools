@@ -1,9 +1,18 @@
 # Import all the basic drone control functions
-from commands import *
 import time
 import sys
 import keyboard
-from drone import Drone
+import os
+#Steps to import the Drone class
+# 1. Get the directory of the current test file (.../tests)
+current_dir = os.path.dirname(os.path.abspath(__file__))
+# 2. Get the parent directory (.../DRONE_CONTROL_TOOLS)
+parent_dir = os.path.dirname(current_dir)
+# 3. Add the parent directory to Python's system path
+sys.path.append(parent_dir)
+
+# --- Import the Drone class ---
+from src.drone import Drone
 
 #Connect to the drone
 #Default parameter: "udp:127.0.0.1:14551"

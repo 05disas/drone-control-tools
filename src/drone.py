@@ -1,6 +1,5 @@
 from pymavlink import mavutil
 import time
-from commands import Commands
 
 ARM_DISARM_COMMAND = mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM
 TAKEOFF_COMMAND = mavutil.mavlink.MAV_CMD_NAV_TAKEOFF
